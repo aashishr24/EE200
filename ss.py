@@ -40,7 +40,7 @@ if freq_min != fingerprinter.freq_min or freq_max != fingerprinter.freq_max:
     fingerprinter.max_freq_bin = int(freq_max * fingerprinter.n_fft / fingerprinter.target_sr)
 
 # Main app tabs
-tab1, tab2, tab3 = st.tabs(["📚 Build Database", "🔍 Query & Identify", "📊 Analysis"])
+tab1, tab2, tab2b, tab3 = st.tabs(["📚 Build Database", "🔍 Query & Identify", "🎵 Batch Mode", "📊 Analysis"])
 
 # ==================== TAB 1: BUILD DATABASE ====================
 with tab1:
@@ -257,6 +257,114 @@ with tab2:
                     
                 except Exception as e:
                     st.error(f"Error processing query: {e}")
+
+# ==================== TAB 2B: BATCH MODE ====================
+with tab2b:
+    st.header("3. Batch Mode - Multiple Queries")
+    st.write("Upload multiple WAV files and get predictions for all of them. Results will be saved as `results.csv`")
+    
+    if 'database' not in st.session_state or not st.session_state.database:
+        st.warning("⚠️ No database loaded! Build a database first in the 'Build Database' tab.")
+    else:
+        st.subheader("Upload Query Clips (Batch)")
+        batch_files = st.file_uploader(
+            "Upload multiple WAV files for batch processing",
+            type=['wav'],
+            accept_multiple_files=True,
+            key='batch_upload'
+        )
+        
+        if batch_files:
+            if st.button("🎵 Process Batch", key="process_batch"):
+                st.info(f"Processing {len(batch_files)} files...")
+                
+                # Create temporary directory for batch files
+                batch_temp_dir = tempfile.mkdtemp()
+                batch_results = []
+                progress_bar = st.progress(0)
+                
+                for idx, batch_file in enumerate(batch_files):
+                    file_path = os.path.join(batch_temp_dir, batch_file.name)
+                    with open(file_path, 'wb') as f:
+                        f.write(batch_file.getbuffer())
+                    
+                    # Get filename without extension (for results.csv)
+                    filename_no_ext = os.path.splitext(batch_file.name)[0]
+                    
+                    try:
+                        # Load and process
+                        query_audio, query_sr = fingerprinter.load_audio(file_path)
+                        
+                        # Extract fingerprints
+                        frequencies, times, magnitude = fingerprinter.compute_spectrogram(query_audio, query_sr)
+                        peaks = fingerprinter.find_peaks(magnitude, frequencies, threshold_db)
+                        
+                        if use_pairs:
+                            query_fps = fingerprinter.create_fingerprint_pairs(peaks, frequencies, times)
+                        else:
+                            query_fps = fingerprinter.create_single_peak_fingerprints(peaks, frequencies, times)
+                        
+                        # Match against database
+                        results = fingerprinter.match_query(query_audio, query_sr, 
+                                                           st.session_state.database, use_pairs)
+                        
+                        # Find best match
+                        if results:
+                            best_match = max(results.items(), key=lambda x: x[1]['score'])
+                            best_song = best_match[0]
+                            best_score = best_match[1]['score']
+                        else:
+                            best_song = "NO_MATCH"
+                            best_score = 0
+                        
+                        batch_results.append({
+                            'filename': filename_no_ext,
+                            'prediction': best_song,
+                            'score': best_score
+                        })
+                        
+                    except Exception as e:
+                        st.warning(f"Error processing {batch_file.name}: {e}")
+                        batch_results.append({
+                            'filename': filename_no_ext,
+                            'prediction': 'ERROR',
+                            'score': 0
+                        })
+                    
+                    progress_bar.progress((idx + 1) / len(batch_files))
+                
+                # Display results
+                st.success(f"✅ Processed {len(batch_results)} files!")
+                
+                # Create and display results table
+                results_df = []
+                for result in batch_results:
+                    results_df.append({
+                        'filename': result['filename'],
+                        'prediction': result['prediction'],
+                        'confidence': f"{result['score']:.1f}"
+                    })
+                
+                st.subheader("📋 Batch Results")
+                st.dataframe(results_df, use_container_width=True)
+                
+                # Create results.csv in the exact format required
+                csv_content = "filename,prediction\n"
+                for result in batch_results:
+                    csv_content += f"{result['filename']},{result['prediction']}\n"
+                
+                # Save to session state for download
+                st.session_state.results_csv = csv_content
+                
+                # Download button
+                st.download_button(
+                    label="📥 Download results.csv",
+                    data=csv_content,
+                    file_name="results.csv",
+                    mime="text/csv"
+                )
+                
+                st.info("✅ results.csv contains exactly two columns: filename, prediction")
 
 # ==================== TAB 3: ANALYSIS & INSIGHTS ====================
 with tab3:
